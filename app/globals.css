@@ -1,9 +1,15 @@
 @tailwind base;
 @tailwind components;
-@utilities;
+@tailwind utilities;
 
-/* On remet les bases simples */
 body {
-  background-color: #111827; /* Gray 900 */
+  /* Fond sombre avec une nuance bleutée profonde */
+  background: radial-gradient(circle at top center, #1f2937 0%, #111827 50%, #030712 100%);
   color: #ffffff;
+  min-height: 100vh;
+}
+
+/* Effet de lueur verte pour le thème Five */
+.glow-text {
+  text-shadow: 0 0 20px rgba(74, 222, 128, 0.5);
 }
