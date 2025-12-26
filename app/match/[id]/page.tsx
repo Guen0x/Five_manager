@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/utils/supabaseClient'
 import Link from 'next/link'
-import { Trophy, Medal, Video, Users, Trash2, Crown, Link as LinkIcon, Share2, ArrowLeft, ClipboardList } from 'lucide-react'
+import { Trophy, Medal, Video, Users, Trash2, Crown, Link as LinkIcon, Share2, ArrowLeft, ClipboardList, ShieldAlert, Eye, EyeOff } from 'lucide-react'
 
 // --- TYPES ---
 interface Player {
@@ -40,6 +40,13 @@ interface LeaderboardEntry {
   isGuest?: boolean
 }
 
+// Type pour Admin Stats
+interface VoteStat {
+    voter_id: string
+    ip_address: string | null
+    count: number
+}
+
 export default function MatchPage() {
   const params = useParams()
   const router = useRouter()
@@ -58,6 +65,10 @@ export default function MatchPage() {
   const [videos, setVideos] = useState<VideoItem[]>([])
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([])
 
+  // Admin États
+  const [voteStats, setVoteStats] = useState<VoteStat[]>([])
+  const [showAdminStats, setShowAdminStats] = useState(false)
+
   // Inputs
   const [newVideoUrl, setNewVideoUrl] = useState('')
   const [newVideoDesc, setNewVideoDesc] = useState('')
@@ -67,6 +78,13 @@ export default function MatchPage() {
     supabase.auth.getUser().then(({ data }) => setCurrentUser(data.user?.id || null))
     fetchAllData()
   }, [])
+
+  useEffect(() => {
+    // Si on est le créateur et qu'on est sur l'onglet résultats, on charge les stats
+    if (currentUser && matchInfo && currentUser === matchInfo.created_by && activeTab === 'results') {
+        fetchAdminStats()
+    }
+  }, [currentUser, matchInfo, activeTab])
 
   async function fetchAllData() {
     setLoading(true)
@@ -102,10 +120,9 @@ export default function MatchPage() {
         .order('created_at', { ascending: false })
     setVideos(videoData as VideoItem[] || [])
 
-    // 5. RÉSULTATS (Calcul du classement INCLUANT les invités)
+    // 5. RÉSULTATS
     const { data: votes } = await supabase.from('votes').select('target_id, rating').eq('match_id', matchId)
     
-    // Calcul des scores bruts
     const scores: Record<string, number> = {}
     if (votes) {
         votes.forEach(v => {
@@ -113,10 +130,8 @@ export default function MatchPage() {
         })
     }
 
-    // On construit le leaderboard en itérant sur la COMPO
     const fullLeaderboard = lineup.map(entry => {
         const isGuest = !entry.user_id
-        // L'ID cible est soit l'UUID du user, soit "guest-{id_lineup}"
         const targetId = isGuest ? `guest-${entry.id}` : entry.user_id
         
         return {
@@ -124,15 +139,39 @@ export default function MatchPage() {
             name: isGuest ? entry.guest_name : entry.profile?.username,
             avatar: isGuest ? null : entry.profile?.avatar_url,
             isGuest: isGuest,
-            score: scores[targetId] || 0 // 0 par défaut
+            score: scores[targetId] || 0 
         }
     })
 
-    // Tri : Score décroissant
     fullLeaderboard.sort((a, b) => b.score - a.score)
     setLeaderboard(fullLeaderboard)
 
     setLoading(false)
+  }
+
+  // --- ADMIN : Fetch IPs ---
+  async function fetchAdminStats() {
+    const { data } = await supabase
+      .from('votes')
+      .select('voter_id, ip_address')
+      .eq('match_id', matchId)
+    
+    if (data) {
+        const statsMap = new Map<string, VoteStat>();
+        data.forEach((vote: any) => {
+            if (!statsMap.has(vote.voter_id)) {
+                statsMap.set(vote.voter_id, {
+                    voter_id: vote.voter_id,
+                    ip_address: vote.ip_address,
+                    count: 1
+                })
+            } else {
+                const current = statsMap.get(vote.voter_id)!
+                current.count++
+            }
+        })
+        setVoteStats(Array.from(statsMap.values()))
+    }
   }
 
   // --- ACTIONS ---
@@ -141,13 +180,13 @@ export default function MatchPage() {
     if (!matchInfo?.invite_token) return
     const link = `${window.location.origin}/join/${matchInfo.invite_token}`
     navigator.clipboard.writeText(link)
-    alert("Lien d'invitation copié ! 🔗\nEnvoie-le à tes potes.")
+    alert("Lien d'invitation copié ! 🔗")
   }
 
   const copyVoteLink = () => {
     const link = `${window.location.origin}/vote/${matchId}`
     navigator.clipboard.writeText(link)
-    alert("Lien de vote copié ! 🗳️\nEnvoie-le au groupe WhatsApp pour les invités.")
+    alert("Lien de vote copié ! 🗳️")
   }
 
   async function addGuest(team: 'A' | 'B') {
@@ -172,7 +211,6 @@ export default function MatchPage() {
   }
 
   async function movePlayer(userId: string, targetTeam: 'A' | 'B') {
-    // Supprime l'ancienne position et ajoute la nouvelle
     await supabase.from('lineups').delete().eq('match_id', matchId).eq('user_id', userId)
     await supabase.from('lineups').insert({ match_id: Number(matchId), user_id: userId, team: targetTeam })
     fetchAllData()
@@ -186,7 +224,6 @@ export default function MatchPage() {
 
   async function addVideo() {
     if (!newVideoUrl) return
-    // Regex pour extraire l'ID Youtube
     const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/
     const match = newVideoUrl.match(regExp)
     const embedId = (match && match[2].length === 11) ? match[2] : null
@@ -217,42 +254,22 @@ export default function MatchPage() {
     <main className="min-h-screen bg-gray-900 p-4 text-white pb-20">
       <div className="max-w-4xl mx-auto">
         
-        {/* HEADER NAVIGATION */}
+        {/* HEADER */}
         <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
             <Link href="/" className="text-gray-400 hover:text-white flex items-center gap-2 self-start md:self-auto">
                 <ArrowLeft size={20} /> Accueil
             </Link>
-
             <div className="flex flex-wrap gap-2 justify-center">
-                {/* 1. Inviter (Rejoindre la feuille de match) */}
-                <button 
-                    onClick={copyInviteLink}
-                    className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-2 rounded-lg font-bold text-sm shadow-lg shadow-blue-900/20 flex items-center gap-2 transition"
-                >
+                <button onClick={copyInviteLink} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-2 rounded-lg font-bold text-sm shadow-lg shadow-blue-900/20 flex items-center gap-2 transition">
                     <LinkIcon size={16} /> Inviter
                 </button>
-                
-                {/* 2. Voter (Pour moi) */}
-                <Link 
-                  href={`/vote/${matchId}`} 
-                  className="bg-yellow-500 hover:bg-yellow-400 text-black px-3 py-2 rounded-lg font-bold text-sm shadow-lg shadow-yellow-500/20 flex items-center gap-2 transition"
-                >
+                <Link href={`/vote/${matchId}`} className="bg-yellow-500 hover:bg-yellow-400 text-black px-3 py-2 rounded-lg font-bold text-sm shadow-lg shadow-yellow-500/20 flex items-center gap-2 transition">
                   <Trophy size={16} /> Voter MVP
                 </Link>
-
-                {/* 3. Lien Vote (Pour les autres) */}
-                <button 
-                  onClick={copyVoteLink}
-                  className="bg-purple-600 hover:bg-purple-500 text-white px-3 py-2 rounded-lg font-bold text-sm shadow-lg shadow-purple-900/20 flex items-center gap-2 transition"
-                >
+                <button onClick={copyVoteLink} className="bg-purple-600 hover:bg-purple-500 text-white px-3 py-2 rounded-lg font-bold text-sm shadow-lg shadow-purple-900/20 flex items-center gap-2 transition">
                   <ClipboardList size={16} /> Lien Vote
                 </button>
-
-                {/* 4. Story (Partage Image) */}
-                <Link 
-                  href={`/match/${matchId}/share`}
-                  className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded-lg font-bold text-sm shadow-lg shadow-indigo-900/20 flex items-center gap-2 transition"
-                >
+                <Link href={`/match/${matchId}/share`} className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded-lg font-bold text-sm shadow-lg shadow-indigo-900/20 flex items-center gap-2 transition">
                    <Share2 size={16} /> Story
                 </Link>
             </div>
@@ -282,8 +299,6 @@ export default function MatchPage() {
         {/* --- ONGLET 1 : COMPO --- */}
         {activeTab === 'compo' && (
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-                
-                {/* ADMIN PANEL (Ajout Invités) */}
                 {isCreator && (
                     <div className="bg-gray-800/50 border border-white/10 p-4 rounded-xl mb-8 flex flex-col md:flex-row gap-4 items-end">
                         <div className="flex-1 w-full">
@@ -303,7 +318,6 @@ export default function MatchPage() {
                     </div>
                 )}
 
-                {/* TEAMS DISPLAY */}
                 <div className="flex flex-col md:flex-row gap-6 mb-12">
                     {/* TEAM A */}
                     <div className="flex-1 bg-gray-800/40 rounded-2xl border border-blue-500/30 overflow-hidden">
@@ -322,7 +336,6 @@ export default function MatchPage() {
                                     )}
                                 </div>
                             ))}
-                            {teamA.length === 0 && <p className="text-center text-gray-500 text-sm italic py-4">Aucun joueur</p>}
                         </div>
                     </div>
 
@@ -348,12 +361,10 @@ export default function MatchPage() {
                                     )}
                                 </div>
                             ))}
-                             {teamB.length === 0 && <p className="text-center text-gray-500 text-sm italic py-4">Aucun joueur</p>}
                         </div>
                     </div>
                 </div>
 
-                {/* SELECTOR (Pour ajouter des membres inscrits déjà existants dans la base) */}
                 <div className="bg-gray-800/30 p-6 rounded-2xl border border-white/5">
                     <h3 className="font-bold mb-4 text-gray-400 text-xs uppercase tracking-widest">Joueurs inscrits (Membres)</h3>
                     <div className="flex flex-wrap gap-2">
@@ -382,14 +393,44 @@ export default function MatchPage() {
         {/* --- ONGLET 2 : RESULTATS --- */}
         {activeTab === 'results' && (
             <div className="animate-in fade-in zoom-in duration-500 max-w-lg mx-auto">
+                
+                {/* --- ZONE ADMIN (Nouvelle) --- */}
+                {isCreator && (
+                    <div className="mb-8 bg-red-900/10 border border-red-500/20 rounded-xl overflow-hidden">
+                        <button 
+                            onClick={() => setShowAdminStats(!showAdminStats)}
+                            className="w-full flex items-center justify-between p-4 text-red-400 font-bold text-xs uppercase tracking-widest hover:bg-red-900/20 transition"
+                        >
+                            <span className="flex items-center gap-2"><ShieldAlert size={14}/> Admin / Sécurité ({voteStats.length} votants)</span>
+                            {showAdminStats ? <EyeOff size={14} /> : <Eye size={14} />}
+                        </button>
+                        
+                        {showAdminStats && (
+                            <div className="p-4 border-t border-red-500/10 bg-black/20 text-xs">
+                                <div className="space-y-2 max-h-60 overflow-y-auto">
+                                    {voteStats.map((stat, i) => (
+                                        <div key={i} className="flex justify-between items-center bg-gray-900 p-2 rounded border border-gray-700">
+                                            <span className="text-gray-300 truncate max-w-[150px]" title={stat.voter_id}>
+                                                {stat.voter_id.startsWith('anon-') ? 'Invité' : 'Membre'} 
+                                                <span className="text-gray-600 ml-1">({stat.voter_id.substring(0,6)}...)</span>
+                                            </span>
+                                            <span className="font-mono text-yellow-500">{stat.ip_address || "IP Cachée"}</span>
+                                        </div>
+                                    ))}
+                                    {voteStats.length === 0 && <p className="italic text-gray-500">Aucun vote.</p>}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+
                 {leaderboard.length === 0 ? (
                     <div className="text-center py-20 bg-gray-800/30 rounded-2xl border border-dashed border-gray-700">
                         <Trophy size={48} className="mx-auto text-gray-600 mb-4" />
-                        <p className="text-gray-400">Compo vide.</p>
+                        <p className="text-gray-400">Compo vide ou pas de votes.</p>
                     </div>
                 ) : (
                     <div className="space-y-4">
-                        {/* PODIUM #1 (Si des votes existent) */}
                         {leaderboard[0].score > 0 ? (
                             <div className="relative bg-gradient-to-b from-yellow-500/20 to-yellow-900/10 p-6 rounded-2xl border border-yellow-500/30 text-center mb-8 shadow-2xl shadow-yellow-900/20">
                                 <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-yellow-500 text-black font-black px-4 py-1 rounded-full text-xs uppercase tracking-widest shadow-lg flex items-center gap-1">
@@ -401,11 +442,10 @@ export default function MatchPage() {
                             </div>
                         ) : (
                              <div className="text-center mb-8 bg-gray-800/40 p-4 rounded-xl border border-white/5">
-                                <p className="text-gray-400 text-sm">Le match n'a pas encore commencé ou les votes sont en cours.</p>
+                                <p className="text-gray-400 text-sm">Votes en cours...</p>
                              </div>
                         )}
 
-                        {/* LISTE COMPLÈTE */}
                         <div className="bg-gray-800/50 rounded-xl overflow-hidden border border-white/5">
                             {leaderboard.map((entry, index) => (
                                 <div key={entry.playerId} className={`flex items-center justify-between p-4 border-b border-white/5 last:border-0 hover:bg-white/5 transition ${entry.isGuest ? 'opacity-75' : ''}`}>

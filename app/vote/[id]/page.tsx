@@ -4,11 +4,11 @@ import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/utils/supabaseClient'
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd'
 import Link from 'next/link'
-import { ArrowLeft, Trophy, GripVertical, CheckCircle, AlertTriangle } from 'lucide-react'
+import { ArrowLeft, Trophy, GripVertical, CheckCircle } from 'lucide-react'
 
 // Types
 interface Candidate {
-  id: string // UUID user ou "guest-123"
+  id: string 
   name: string
   isGuest: boolean
 }
@@ -20,27 +20,36 @@ export default function VotePage() {
 
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [voterId, setVoterId] = useState<string | null>(null)
+  const [userIp, setUserIp] = useState<string | null>(null) // Capture IP silencieuse
   const [loading, setLoading] = useState(true)
   const [hasVoted, setHasVoted] = useState(false)
 
   useEffect(() => {
     identifyVoter()
     fetchLineup()
+    fetchUserIp()
   }, [])
+
+  // --- CAPTURE IP (INVISIBLE) ---
+  async function fetchUserIp() {
+    try {
+        const res = await fetch('https://api.ipify.org?format=json')
+        const data = await res.json()
+        setUserIp(data.ip)
+    } catch (e) {
+        console.error("IP non détectée", e)
+    }
+  }
 
   // --- 1. IDENTIFICATION DU VOTEUR ---
   async function identifyVoter() {
-    // A. Est-ce un membre connecté ?
     const { data: { user } } = await supabase.auth.getUser()
     
     if (user) {
         setVoterId(user.id)
         checkIfAlreadyVoted(user.id)
     } else {
-        // B. C'est un invité : on regarde dans son navigateur
         let guestId = localStorage.getItem('five_guest_id')
-        
-        // Si pas d'ID, on en crée un nouveau unique
         if (!guestId) {
             guestId = `anon-${Math.random().toString(36).substr(2, 9)}`
             localStorage.setItem('five_guest_id', guestId)
@@ -106,16 +115,16 @@ export default function VotePage() {
 
         votesToInsert.push({
             match_id: Number(matchId),
-            voter_id: voterId, // L'ID (User ou Invité)
+            voter_id: voterId,
             target_id: candidate.id,
-            rating: points 
+            rating: points,
+            ip_address: userIp // Enregistrement en base
         })
     })
 
     const { error } = await supabase.from('votes').insert(votesToInsert)
 
     if (error) {
-      // Code erreur 23505 = Violated Unique Constraint (Double vote)
       if (error.code === '23505') {
           setHasVoted(true)
           alert("Petit malin ! Tu as déjà voté pour ce match 😉")
@@ -125,7 +134,6 @@ export default function VotePage() {
       }
     } else {
       setHasVoted(true)
-      // On redirige vers les résultats
       router.push(`/match/${matchId}`)
     }
   }
